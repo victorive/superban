@@ -10,10 +10,11 @@ class SuperbanServiceProvider extends ServiceProvider
     {
         //
     }
+
     public function boot(): void
     {
         $this->publishes([
-            __DIR__ . '/../config/superban.php' => config_path('superban.php'),
+            __DIR__.'/../config/superban.php' => config_path('superban.php'),
         ]);
 
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
