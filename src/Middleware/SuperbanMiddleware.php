@@ -31,12 +31,14 @@ class SuperbanMiddleware
 
             $cacheDriver = config('superban.cache_driver');
 
-            Cache::driver($cacheDriver)->put($banCriteria, $bannedUntil, $bannedMinutes);
+            Cache::driver($cacheDriver)->put($banCriteria, $bannedUntil, $bannedMinutes * 60);
 
             return $this->respondWithError($bannedUntil);
         }
 
-        RateLimiter::hit($banCriteria, $decayMinutes * 60);
+        if (!$bannedUntil || (Carbon::now()->timestamp > $bannedUntil)) {
+            RateLimiter::hit($banCriteria, $decayMinutes * 60);
+        }
 
         return $next($request);
     }
@@ -66,7 +68,7 @@ class SuperbanMiddleware
     private function respondWithError(int $bannedUntil): JsonResponse
     {
         return response()->json([
-            'message' => 'You have been banned until '.Carbon::createFromTimestamp($bannedUntil)->toDateTimeString(),
+            'message' => 'You have been banned until ' . Carbon::createFromTimestamp($bannedUntil)->toDateTimeString(),
         ], Response::HTTP_TOO_MANY_REQUESTS);
     }
 }
