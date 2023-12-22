@@ -15,8 +15,6 @@ class SuperbanServiceProvider extends ServiceProvider
     {
         $this->publishes([
             __DIR__.'/../config/superban.php' => config_path('superban.php'),
-        ]);
-
-        $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+        ], 'superban-config');
     }
 }
