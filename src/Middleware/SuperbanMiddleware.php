@@ -36,7 +36,7 @@ class SuperbanMiddleware
             return $this->respondWithError($bannedUntil);
         }
 
-        if (!$bannedUntil || (Carbon::now()->timestamp > $bannedUntil)) {
+        if (! $bannedUntil || (Carbon::now()->timestamp > $bannedUntil)) {
             RateLimiter::hit($banCriteria, $decayMinutes * 60);
         }
 
@@ -68,7 +68,7 @@ class SuperbanMiddleware
     private function respondWithError(int $bannedUntil): JsonResponse
     {
         return response()->json([
-            'message' => 'You have been banned until ' . Carbon::createFromTimestamp($bannedUntil)->toDateTimeString(),
+            'message' => 'You have been banned until '.Carbon::createFromTimestamp($bannedUntil)->toDateTimeString(),
         ], Response::HTTP_TOO_MANY_REQUESTS);
     }
 }
