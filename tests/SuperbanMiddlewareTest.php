@@ -111,7 +111,7 @@ class SuperbanMiddlewareTest extends TestCase
 
         $this->assertEquals(429, $response->getStatusCode());
 
-        $expectedMessage = 'You have been banned until ' . Carbon::now()->addMinutes($bannedMinutes)->toDateTimeString();
+        $expectedMessage = 'You have been banned until '.Carbon::now()->addMinutes($bannedMinutes)->toDateTimeString();
         $actualJson = $response->getContent();
         $expectedJson = json_encode(['message' => $expectedMessage], JSON_THROW_ON_ERROR);
         $this->assertJsonStringEqualsJsonString($expectedJson, $actualJson);

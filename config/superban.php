@@ -13,7 +13,6 @@ return [
      * The ban criteria to use when rate-limiting/banning users.
      *
      * Supported options: "user_id", "email", "ip",
-     *
      */
     'ban_criteria' => env('SUPERBAN_BAN_CRITERIA', 'ip'),
 ];
