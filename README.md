@@ -1,6 +1,8 @@
 # Superban
 
-Superban is a Laravel package designed to enable you ban API clients for a specified period. 
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/victorive/superban.svg?style=flat-square)](https://packagist.org/packages/victorive/superban)
+
+Superban is a Laravel package designed to enable you ban API clients for a specified period.
 It allows you to easily limit the number of requests a client can execute within a certain time frame,
 and if they surpass this limit, they will be banned for the specified duration.
 
@@ -18,13 +20,18 @@ Next, publish the configuration file `(config/superban.php)` with:
 php artisan vendor:publish --tag="superban-config"
 ```
 
-The published configuration file enables you to customize the `SUPERBAN_CACHE_DRIVER` and `SUPERBAN_BAN_CRITERIA` parameters 
+The published configuration file enables you to customize the `SUPERBAN_CACHE_DRIVER` and `SUPERBAN_BAN_CRITERIA`
+parameters
 for rate-limiting operations. These settings can be modified in your .env file with your preferred values.
 
+If you choose to use the "database" as your cache driver, remember to run `php artisan cache:table` to create the necessary tables for the cache storage.
+See the [Cache](https://laravel.com/docs/10.x/cache#driver-prerequisites) docs for more info.
+
 ## Configuration
-* The `SUPERBAN_CACHE_DRIVER` parameter determines the cache driver used for Superban operations. 
-Supported drivers include `"array", "database", "file", "memcached", "redis", "dynamodb", and "octane".`
-* The `SUPERBAN_BAN_CRITERIA` parameter sets the criteria for rate-limiting or banning users. 
+
+* The `SUPERBAN_CACHE_DRIVER` parameter determines the cache driver used for Superban operations.
+  Supported drivers include `"array", "database", "file", "memcached", "redis", "dynamodb", and "octane".`
+* The `SUPERBAN_BAN_CRITERIA` parameter sets the criteria for rate-limiting or banning users.
 * Supported options include `"user_id", "email", and "ip"`.
 
 Example configuration:
@@ -55,6 +62,7 @@ Update your `.env` file with your preferred values for the keys below:
 > SUPERBAN_BAN_CRITERIA= {{your preferred ban criteria}}
 
 ## Usage
+
 To utilize Superban's functionalities, add the following to your `app/Http/Kernel.php` file.
 
 ```php
@@ -88,16 +96,20 @@ Route::post('/thisroute', function () {
 })->middleware(['superban:100,2,720']);
 ```
 
-In the examples above, **100** is the maximum number of requests allowed, **2** is the time period (in minutes)
-during which these requests can occur, and **720** is the duration (in minutes) for which the user will be banned
-after exceeding the limit.
+In the examples above,
+
+* **100** is the maximum number of requests allowed,
+* **2** is the time period (in minutes)
+  during which these requests can occur, and
+* **720** is the duration (in minutes) for which the user will be banned
+  after exceeding the limit.
 
 ## Testing
 
 To run the tests, use the following command:
 
 ```bash
-/vendor/bin/phpunit
+vendor/bin/phpunit
 ```
 
 ## Changelog
@@ -106,7 +118,7 @@ For information on recent updates, refer to the [CHANGELOG](CHANGELOG.md) file.
 
 ## Contributing
 
-Contributions are welcome!
+Contributions are welcome! Feel free to fork the repo, make any changes or report any issues, and submit a PR.
 
 ## License
 
