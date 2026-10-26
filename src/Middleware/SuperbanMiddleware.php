@@ -1,74 +1,66 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Victorive\Superban\Middleware;
 
-use Carbon\Carbon;
 use Closure;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\RateLimiter;
-use Psr\SimpleCache\InvalidArgumentException;
 use Symfony\Component\HttpFoundation\Response;
-use Victorive\Superban\Exceptions\InvalidBanCriteriaException;
+use Victorive\Superban\DTO\Ban;
+use Victorive\Superban\DTO\Limit;
+use Victorive\Superban\SuperbanManager;
 
-class SuperbanMiddleware
+final class SuperbanMiddleware
 {
-    /**
-     * @throws InvalidArgumentException
-     */
-    public function handle(Request $request, Closure $next, int $maxAttempts, int $decayMinutes, int $bannedMinutes): Response
+    public function __construct(private SuperbanManager $superban) {}
+
+    public function handle(Request $request, Closure $next, string $maxAttempts, string $decayMinutes = '1', string $bannedMinutes = '60'): Response
     {
-        $banCriteria = $this->getBanCriteria($request);
-        $bannedUntil = $this->getBannedUntil($banCriteria);
+        $limit = $this->superban->resolveLimit([$maxAttempts, $decayMinutes, $bannedMinutes]);
 
-        if ($bannedUntil && (Carbon::now()->timestamp < $bannedUntil)) {
-            return $this->respondWithError($bannedUntil);
+        $decision = $this->superban->enforce($request, $limit);
+
+        if ($decision->allowed) {
+            $response = $next($request);
+
+            return $this->addRateLimitHeaders($response, $limit, $decision->remainingAttempts);
         }
 
-        if (RateLimiter::tooManyAttempts($banCriteria, $maxAttempts)) {
-            $bannedUntil = Carbon::now()->addMinutes($bannedMinutes)->timestamp;
+        $ban = $decision->ban;
 
-            $cacheDriver = config('superban.cache_driver');
-
-            Cache::driver($cacheDriver)->put($banCriteria, $bannedUntil, $bannedMinutes * 60);
-
-            return $this->respondWithError($bannedUntil);
+        if ($ban === null) {
+            return $this->superban->responder()->limited($request, $limit, []);
         }
 
-        if (! $bannedUntil || (Carbon::now()->timestamp > $bannedUntil)) {
-            RateLimiter::hit($banCriteria, $decayMinutes * 60);
-        }
-
-        return $next($request);
+        return $this->superban->responder()->banned($request, $ban, $this->banHeaders($ban));
     }
 
-    private function getBanCriteria(Request $request)
+    private function addRateLimitHeaders(Response $response, Limit $limit, int $remaining): Response
     {
-        $banCriteriaType = config('superban.ban_criteria');
+        if (! config('superban.response.headers', true)) {
+            return $response;
+        }
 
-        return match ($banCriteriaType) {
-            'user_id' => $request->user() ? $request->user()->id : null,
-            'email' => $request->user() ? $request->user()->email : null,
-            'ip' => $request->ip(),
-            default => throw new InvalidBanCriteriaException('The provided ban criteria is invalid.')
-        };
+        $response->headers->set('X-RateLimit-Limit', (string) $limit->maxAttempts);
+        $response->headers->set('X-RateLimit-Remaining', (string) $remaining);
+
+        return $response;
     }
 
     /**
-     * @throws InvalidArgumentException
+     * @return array<string, string>
      */
-    public function getBannedUntil(string $banCriteria): ?int
+    private function banHeaders(Ban $ban): array
     {
-        $cacheDriver = config('superban.cache_driver');
+        if (! config('superban.response.headers', true)) {
+            return [];
+        }
 
-        return Cache::driver($cacheDriver)->get($banCriteria);
-    }
-
-    private function respondWithError(int $bannedUntil): JsonResponse
-    {
-        return response()->json([
-            'message' => 'You have been banned until '.Carbon::createFromTimestamp($bannedUntil)->toDateTimeString(),
-        ], Response::HTTP_TOO_MANY_REQUESTS);
+        return [
+            'Retry-After' => (string) $ban->retryAfter(),
+            'X-Ban-Until' => (string) $ban->bannedUntil,
+            'X-Ban-Scope' => $ban->scope ?? 'global',
+        ];
     }
 }

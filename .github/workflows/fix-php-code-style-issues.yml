@@ -1,9 +1,12 @@
-name: Fix PHP code style issues
+name: fix-php-code-style-issues
 
 on:
   push:
+    branches: [main, 1.x, 2.x]
     paths:
       - '**.php'
+  pull_request:
+    branches: [main, 1.x, 2.x]
 
 permissions:
   contents: write
@@ -15,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.head_ref }}
 
