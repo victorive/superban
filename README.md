@@ -6,6 +6,13 @@ Superban is a Laravel package designed to enable you ban API clients for a speci
 It allows you to easily limit the number of requests a client can execute within a certain time frame,
 and if they surpass this limit, they will be banned for the specified duration.
 
+## Requirements
+
+- PHP 8.1 - 8.3
+- Laravel 10.x
+
+> For Laravel 11/12/13, use [Superban 2.0+](https://packagist.org/packages/victorive/superban).
+
 ## Installation
 
 Install the package via composer using:
@@ -63,7 +70,8 @@ Update your `.env` file with your preferred values for the keys below:
 
 ## Usage
 
-To utilize Superban's functionalities, add the following to your `app/Http/Kernel.php` file.
+The `superban` middleware alias is registered automatically by the service provider.
+You can optionally add it manually in `app/Http/Kernel.php` if you prefer:
 
 ```php
 protected $middlewareAliases = [
@@ -72,7 +80,7 @@ protected $middlewareAliases = [
 ];
 ```
 
-Then you can protect your routes using the middleware rules. For instance
+Then protect your routes using the middleware rules. For instance
 
 * **Route group:**
 

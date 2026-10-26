@@ -14,61 +14,72 @@ use Victorive\Superban\Exceptions\InvalidBanCriteriaException;
 
 class SuperbanMiddleware
 {
+    private const KEY_PREFIX = 'superban:';
+
     /**
      * @throws InvalidArgumentException
      */
     public function handle(Request $request, Closure $next, int $maxAttempts, int $decayMinutes, int $bannedMinutes): Response
     {
         $banCriteria = $this->getBanCriteria($request);
-        $bannedUntil = $this->getBannedUntil($banCriteria);
+        $key = self::KEY_PREFIX.$banCriteria;
 
-        if ($bannedUntil && (Carbon::now()->timestamp < $bannedUntil)) {
+        $bannedUntil = $this->getBannedUntil($key);
+
+        if ($bannedUntil !== null && Carbon::now()->timestamp < $bannedUntil) {
             return $this->respondWithError($bannedUntil);
         }
 
-        if (RateLimiter::tooManyAttempts($banCriteria, $maxAttempts)) {
+        $attempts = RateLimiter::hit($key, $decayMinutes * 60);
+
+        if ($attempts > $maxAttempts) {
             $bannedUntil = Carbon::now()->addMinutes($bannedMinutes)->timestamp;
 
             $cacheDriver = config('superban.cache_driver');
 
-            Cache::driver($cacheDriver)->put($banCriteria, $bannedUntil, $bannedMinutes * 60);
+            Cache::driver($cacheDriver)->put($key, $bannedUntil, $bannedMinutes * 60);
+            RateLimiter::clear($key);
 
             return $this->respondWithError($bannedUntil);
-        }
-
-        if (! $bannedUntil || (Carbon::now()->timestamp > $bannedUntil)) {
-            RateLimiter::hit($banCriteria, $decayMinutes * 60);
         }
 
         return $next($request);
     }
 
-    private function getBanCriteria(Request $request)
+    private function getBanCriteria(Request $request): string
     {
         $banCriteriaType = config('superban.ban_criteria');
 
         return match ($banCriteriaType) {
-            'user_id' => $request->user() ? $request->user()->id : null,
-            'email' => $request->user() ? $request->user()->email : null,
-            'ip' => $request->ip(),
+            'user_id' => (string) ($request->user()?->id ?? $this->fallbackIdentifier($request)),
+            'email' => $request->user()?->email ?? $this->fallbackIdentifier($request),
+            'ip' => $request->ip() ?? $this->fallbackIdentifier($request),
             default => throw new InvalidBanCriteriaException('The provided ban criteria is invalid.')
         };
+    }
+
+    private function fallbackIdentifier(Request $request): string
+    {
+        return $request->ip() ?? 'unknown';
     }
 
     /**
      * @throws InvalidArgumentException
      */
-    public function getBannedUntil(string $banCriteria): ?int
+    public function getBannedUntil(string $key): ?int
     {
         $cacheDriver = config('superban.cache_driver');
+        $value = Cache::driver($cacheDriver)->get($key);
 
-        return Cache::driver($cacheDriver)->get($banCriteria);
+        return $value === null ? null : (int) $value;
     }
 
     private function respondWithError(int $bannedUntil): JsonResponse
     {
+        $retryAfter = max(0, $bannedUntil - Carbon::now()->timestamp);
+
         return response()->json([
             'message' => 'You have been banned until '.Carbon::createFromTimestamp($bannedUntil)->toDateTimeString(),
-        ], Response::HTTP_TOO_MANY_REQUESTS);
+        ], Response::HTTP_TOO_MANY_REQUESTS)->header('Retry-After', $retryAfter);
     }
 }

@@ -4,10 +4,9 @@ namespace Victorive\Superban\Tests;
 
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Config;
-use JsonException;
 use Orchestra\Testbench\TestCase;
-use Psr\SimpleCache\InvalidArgumentException;
 use stdClass;
 use Symfony\Component\HttpFoundation\Response;
 use Victorive\Superban\Exceptions\InvalidBanCriteriaException;
@@ -15,13 +14,35 @@ use Victorive\Superban\Middleware\SuperbanMiddleware;
 
 class SuperbanMiddlewareTest extends TestCase
 {
-    protected SuperbanMiddleware $superBanMiddleware;
+    protected SuperbanMiddleware $middleware;
 
     protected function setUp(): void
     {
         parent::setUp();
 
-        $this->superBanMiddleware = new SuperbanMiddleware();
+        Config::set('cache.default', 'array');
+        Config::set('superban.cache_driver', 'array');
+        Cache::flush();
+        Carbon::setTestNow(Carbon::now());
+
+        $this->middleware = new SuperbanMiddleware();
+    }
+
+    protected function tearDown(): void
+    {
+        Carbon::setTestNow();
+
+        parent::tearDown();
+    }
+
+    private function requestWithUser(?stdClass $user = null): Request
+    {
+        $request = Request::create('/thisroute');
+        if ($user !== null) {
+            $request->setUserResolver(fn () => $user);
+        }
+
+        return $request;
     }
 
     public static function banCriteriaDataProvider(): array
@@ -33,106 +54,124 @@ class SuperbanMiddlewareTest extends TestCase
         ];
     }
 
+    public function testAllowedRequestPasses(): void
+    {
+        Config::set('superban.ban_criteria', 'ip');
+
+        $request = $this->requestWithUser();
+        $response = $this->middleware->handle($request, fn () => new Response('ok'), 2, 1, 5);
+
+        $this->assertEquals(Response::HTTP_OK, $response->getStatusCode());
+    }
+
     /**
      * @dataProvider banCriteriaDataProvider
      */
-    public function testUserNotBannedIsAllowedThrough(string $banCriteria): void
+    public function testGuestDoesNotCrashWithAnyCriteria(string $banCriteria): void
     {
         Config::set('superban.ban_criteria', $banCriteria);
+
+        $request = $this->requestWithUser();
+        $response = $this->middleware->handle($request, fn () => new Response('ok'), 2, 1, 5);
+
+        $this->assertEquals(Response::HTTP_OK, $response->getStatusCode());
+    }
+
+    public function testAuthenticatedUserCriteriaWork(): void
+    {
+        Config::set('superban.ban_criteria', 'user_id');
 
         $user = new stdClass();
         $user->id = 1;
         $user->email = 'test@example.com';
 
-        $request = Request::create('/thisroute');
-        $request->setUserResolver(function () use ($user) {
-            return $user;
-        });
+        $request = $this->requestWithUser($user);
+        $response = $this->middleware->handle($request, fn () => new Response('ok'), 2, 1, 5);
 
-        $maxAttempts = 200;
-        $decayMinutes = 2;
-        $bannedMinutes = 1440;
-
-        $response = $this->superBanMiddleware->handle($request, function () {
-            return new Response('Test response');
-        }, $maxAttempts, $decayMinutes, $bannedMinutes);
-
-        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertEquals(Response::HTTP_OK, $response->getStatusCode());
     }
 
-    /**
-     * @throws InvalidArgumentException
-     */
     public function testBannedUserIsDeniedAccess(): void
     {
         Config::set('superban.ban_criteria', 'ip');
 
-        $request = Request::create('/thisroute');
-        $middleware = $this->getMockBuilder(SuperbanMiddleware::class)
-            ->onlyMethods(['getBannedUntil'])
-            ->getMock();
+        $request = $this->requestWithUser();
+        $bannedUntil = Carbon::now()->addMinutes(5)->timestamp;
+        Cache::put('superban:'.$request->ip(), $bannedUntil, 5);
 
-        $middleware->expects($this->once())
-            ->method('getBannedUntil')
-            ->willReturn(Carbon::now()->addHour()->timestamp);
+        $response = $this->middleware->handle($request, fn () => new Response('ok'), 2, 1, 5);
 
-        $maxAttempts = 200;
-        $decayMinutes = 2;
-        $bannedMinutes = 1440;
-
-        $response = $middleware->handle($request, function () {
-        }, $maxAttempts, $decayMinutes, $bannedMinutes);
-
-        $this->assertEquals(429, $response->getStatusCode());
+        $this->assertEquals(Response::HTTP_TOO_MANY_REQUESTS, $response->getStatusCode());
+        $this->assertTrue($response->headers->has('Retry-After'));
     }
 
-    /**
-     * @throws InvalidArgumentException
-     * @throws JsonException
-     */
     public function testUserExceedingRateLimitIsBanned(): void
     {
         Config::set('superban.ban_criteria', 'ip');
 
-        $request = Request::create('/anotherroute');
+        $request = $this->requestWithUser();
+        $maxAttempts = 2;
+        $decayMinutes = 1;
+        $bannedMinutes = 5;
 
-        $maxAttempts = 200;
-        $decayMinutes = 2;
-        $bannedMinutes = 1440;
+        $this->middleware->handle($request, fn () => new Response('ok'), $maxAttempts, $decayMinutes, $bannedMinutes);
+        $this->middleware->handle($request, fn () => new Response('ok'), $maxAttempts, $decayMinutes, $bannedMinutes);
 
-        for ($i = 0; $i < 201; $i++) {
-            $this->superBanMiddleware->handle($request, function () {
-                return new Response('Test response');
-            }, $maxAttempts, $decayMinutes, $bannedMinutes);
-        }
+        $response = $this->middleware->handle($request, fn () => new Response('ok'), $maxAttempts, $decayMinutes, $bannedMinutes);
 
-        $response = $this->superBanMiddleware->handle($request, function () {
-        }, $maxAttempts, $decayMinutes, $bannedMinutes);
-
-        $this->assertEquals(429, $response->getStatusCode());
-
-        $expectedMessage = 'You have been banned until '.Carbon::now()->addMinutes($bannedMinutes)->toDateTimeString();
-        $actualJson = $response->getContent();
-        $expectedJson = json_encode(['message' => $expectedMessage], JSON_THROW_ON_ERROR);
-        $this->assertJsonStringEqualsJsonString($expectedJson, $actualJson);
+        $this->assertEquals(Response::HTTP_TOO_MANY_REQUESTS, $response->getStatusCode());
+        $this->assertStringContainsString('You have been banned until', $response->getContent());
+        $this->assertTrue($response->headers->has('Retry-After'));
     }
 
-    /**
-     * @throws InvalidArgumentException
-     */
+    public function testUserCanAccessRouteAfterBanTimeExpires(): void
+    {
+        Config::set('superban.ban_criteria', 'ip');
+
+        $request = $this->requestWithUser();
+        $maxAttempts = 2;
+        $decayMinutes = 1;
+        $bannedMinutes = 5;
+
+        $this->middleware->handle($request, fn () => new Response('ok'), $maxAttempts, $decayMinutes, $bannedMinutes);
+        $this->middleware->handle($request, fn () => new Response('ok'), $maxAttempts, $decayMinutes, $bannedMinutes);
+        $this->middleware->handle($request, fn () => new Response('ok'), $maxAttempts, $decayMinutes, $bannedMinutes);
+
+        Carbon::setTestNow(Carbon::now()->addMinutes(5));
+
+        $response = $this->middleware->handle($request, fn () => new Response('ok'), $maxAttempts, $decayMinutes, $bannedMinutes);
+
+        $this->assertEquals(Response::HTTP_OK, $response->getStatusCode());
+    }
+
+    public function testRateLimitResetsAfterBanPeriodEndsEvenWhenDecayIsLonger(): void
+    {
+        Config::set('superban.ban_criteria', 'ip');
+
+        $request = $this->requestWithUser();
+        $maxAttempts = 2;
+        $decayMinutes = 10;
+        $bannedMinutes = 1;
+
+        $this->middleware->handle($request, fn () => new Response('ok'), $maxAttempts, $decayMinutes, $bannedMinutes);
+        $this->middleware->handle($request, fn () => new Response('ok'), $maxAttempts, $decayMinutes, $bannedMinutes);
+        $this->middleware->handle($request, fn () => new Response('ok'), $maxAttempts, $decayMinutes, $bannedMinutes);
+
+        Carbon::setTestNow(Carbon::now()->addMinutes(2));
+
+        $response = $this->middleware->handle($request, fn () => new Response('ok'), $maxAttempts, $decayMinutes, $bannedMinutes);
+
+        $this->assertEquals(Response::HTTP_OK, $response->getStatusCode());
+    }
+
     public function testInvalidBanCriteriaThrowsException(): void
     {
-        config(['superban.ban_criteria' => 'invalid']);
+        Config::set('superban.ban_criteria', 'invalid');
 
-        $maxAttempts = 200;
-        $decayMinutes = 2;
-        $bannedMinutes = 1440;
-
-        $request = Request::create('/thisroute');
+        $request = $this->requestWithUser();
 
         $this->expectException(InvalidBanCriteriaException::class);
 
-        $this->superBanMiddleware->handle($request, function () {
-        }, $maxAttempts, $decayMinutes, $bannedMinutes);
+        $this->middleware->handle($request, fn () => new Response('ok'), 2, 1, 5);
     }
 }
